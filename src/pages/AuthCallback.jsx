@@ -6,7 +6,7 @@ export default function AuthCallback() {
   useEffect(() => {
     (async () => {
       try {
-        const sb = await getSupabase();
+        const sb = getSupabase();
         if (!sb) { window.location.replace('/'); return; }
 
         // With PKCE flow + detectSessionInUrl (default true),

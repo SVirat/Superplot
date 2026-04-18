@@ -1,22 +1,22 @@
 import { createClient } from '@supabase/supabase-js';
 
-let _supabase = null;
-let _config = null;
-let _configPromise = null;
+const config = {
+  supabaseUrl: import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
+  supabaseAnonKey: import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  googleMapsApiKey: import.meta.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '',
+};
 
-export async function getConfig() {
-  if (_config) return _config;
-  if (!_configPromise) {
-    _configPromise = fetch('/api/config').then(r => r.json()).then(c => { _config = c; return c; });
-  }
-  return _configPromise;
+let _supabase = null;
+
+export function getConfig() {
+  return config;
 }
 
-export async function getSupabase() {
-  if (_supabase) return _supabase;
-  const cfg = await getConfig();
-  _supabase = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
-    auth: { flowType: 'pkce' },
-  });
+export function getSupabase() {
+  if (!_supabase) {
+    _supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+      auth: { flowType: 'pkce' },
+    });
+  }
   return _supabase;
 }

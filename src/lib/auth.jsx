@@ -20,7 +20,7 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let sub;
     (async () => {
-      const sb = await getSupabase();
+      const sb = getSupabase();
       const { data: { session } } = await sb.auth.getSession();
       if (session) {
         try {
@@ -52,7 +52,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signIn = useCallback(async () => {
-    const sb = await getSupabase();
+    const sb = getSupabase();
     if (!sb) return;
     await sb.auth.signInWithOAuth({
       provider: 'google',
@@ -65,7 +65,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    const sb = await getSupabase();
+    const sb = getSupabase();
     if (sb) await sb.auth.signOut();
     setUser(null);
     setActiveAccountId(null);

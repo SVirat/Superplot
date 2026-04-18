@@ -10,7 +10,7 @@ export function setActiveAccountId(id) {
 export function getActiveAccountId() { return _activeAccountId; }
 
 async function authHeaders() {
-  const sb = await getSupabase();
+  const sb = getSupabase();
   if (!sb) return {};
   const { data: { session } } = await sb.auth.getSession();
   const hdrs = {};

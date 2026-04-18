@@ -2,19 +2,9 @@ import { useState, useEffect } from 'react';
 import { MapPin } from 'lucide-react';
 import { getConfig } from '../lib/supabase.js';
 
-// Cache the Maps API key after first load
-let _mapsKey = null;
-let _mapsKeyPromise = null;
-function getMapsKey() {
-  if (_mapsKey !== null) return Promise.resolve(_mapsKey);
-  if (!_mapsKeyPromise) {
-    _mapsKeyPromise = getConfig().then(c => { _mapsKey = c.googleMapsApiKey || ''; return _mapsKey; });
-  }
-  return _mapsKeyPromise;
-}
+const MAPS_KEY = getConfig().googleMapsApiKey;
 
 export default function MapPreview({ lat, lng, name, className = '' }) {
-  const [mapsKey, setMapsKey] = useState(_mapsKey);
   const [streetViewOk, setStreetViewOk] = useState(null);
 
   const hasCoords = lat && lng;
@@ -22,15 +12,11 @@ export default function MapPreview({ lat, lng, name, className = '' }) {
   useEffect(() => {
     if (!hasCoords) return;
     let cancelled = false;
-    getMapsKey().then(key => {
-      if (cancelled) return;
-      setMapsKey(key);
-      if (!key) { setStreetViewOk(false); return; }
-      fetch(`https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&key=${key}`)
-        .then(r => r.json())
-        .then(d => { if (!cancelled) setStreetViewOk(d.status === 'OK'); })
-        .catch(() => { if (!cancelled) setStreetViewOk(false); });
-    });
+    if (!MAPS_KEY) { setStreetViewOk(false); return; }
+    fetch(`https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&key=${MAPS_KEY}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setStreetViewOk(d.status === 'OK'); })
+      .catch(() => { if (!cancelled) setStreetViewOk(false); });
     return () => { cancelled = true; };
   }, [lat, lng, hasCoords]);
 
@@ -46,11 +32,11 @@ export default function MapPreview({ lat, lng, name, className = '' }) {
   if (streetViewOk === null) return <div className={`map-preview-empty ${className}`} />;
 
   // Street View available
-  if (streetViewOk && mapsKey) {
+  if (streetViewOk && MAPS_KEY) {
     return (
       <img
         className={`map-preview-img ${className}`}
-        src={`https://maps.googleapis.com/maps/api/streetview?size=600x300&location=${lat},${lng}&fov=90&key=${mapsKey}`}
+        src={`https://maps.googleapis.com/maps/api/streetview?size=600x300&location=${lat},${lng}&fov=90&key=${MAPS_KEY}`}
         alt={`Street view of ${name}`}
         loading="lazy"
         onError={() => setStreetViewOk(false)}
