@@ -51,7 +51,7 @@ export default function UpgradeBanner() {
         </div>
         <div className="upgrade-banner-text">
           <h3>Upgrade to Premium</h3>
-          <p>Unlimited properties, unlimited member invites, and AI-powered insights coming soon.</p>
+          <p>Unlimited properties, unlimited member invites, and AI-powered insights.</p>
         </div>
       </div>
 

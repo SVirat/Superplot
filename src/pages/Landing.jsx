@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Building2, Shield, FolderOpen, Users, MapPin, Search, ArrowRight, Check, Lock, Globe, FileText, BarChart3, Home, Eye, Upload, UserPlus, ChevronRight, Sparkles, CircleCheck } from 'lucide-react';
+import { Building2, Shield, FolderOpen, Users, MapPin, Search, ArrowRight, Check, Lock, Globe, FileText, BarChart3, Home, Eye, Upload, UserPlus, ChevronRight, Sparkles, CircleCheck, AlertTriangle, XOctagon } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
 import { Navigate } from 'react-router-dom';
 
@@ -456,6 +456,102 @@ function PropertyCardVisual() {
   );
 }
 
+/* ── PRICING SECTION ─────────────────────────────────────────────── */
+function PricingSection({ onSignIn }) {
+  const [billing, setBilling] = useState('annual');
+
+  const FREE_FEATURES = [
+    { text: '15+ document types', icon: 'check' },
+    { text: '100% secure storage', icon: 'check' },
+    { text: '3 properties max', icon: 'warn' },
+    { text: '1 member invite', icon: 'warn' },
+    { text: 'Standard support', icon: 'warn' },
+    { text: 'No AI functionality', icon: 'block' },
+  ];
+  const PRO_FEATURES = [
+    { text: '15+ document types', icon: 'check' },
+    { text: '100% secure storage', icon: 'check' },
+    { text: 'Unlimited properties', icon: 'check' },
+    { text: 'Unlimited member invites', icon: 'check' },
+    { text: 'Priority support', icon: 'check' },
+    { text: 'AI functionality', icon: 'check' },
+  ];
+
+  const FeatureIcon = ({ type }) => {
+    if (type === 'check') return <Check size={16} className="pricing-icon-check" />;
+    if (type === 'warn') return <AlertTriangle size={16} className="pricing-icon-warn" />;
+    return <XOctagon size={16} className="pricing-icon-block" />;
+  };
+
+  return (
+    <section className="landing-pricing" id="pricing">
+      <div className="landing-section-inner">
+        <p className="landing-overline" style={{ textAlign: 'center' }}>Pricing</p>
+        <h2 className="landing-h2" style={{ textAlign: 'center', marginBottom: 48 }}>Simple, transparent pricing.</h2>
+        <div className="pricing-grid">
+          {/* Free tier */}
+          <div className="pricing-card">
+            <div className="pricing-card-header">
+              <h3 className="pricing-tier">Free</h3>
+              <p className="pricing-tier-desc">For getting started</p>
+            </div>
+            <div className="pricing-price-row">
+              <span className="pricing-amount">₹0</span>
+              <span className="pricing-period">forever</span>
+            </div>
+            <ul className="pricing-features">
+              {FREE_FEATURES.map(f => (
+                <li key={f.text}><FeatureIcon type={f.icon} /> {f.text}</li>
+              ))}
+            </ul>
+            <button className="pricing-btn pricing-btn-secondary" onClick={onSignIn}>
+              Get Started
+            </button>
+          </div>
+
+          {/* Premium tier */}
+          <div className="pricing-card pricing-card-pro">
+            <div className="pricing-popular-badge">Most Popular</div>
+            <div className="pricing-card-header">
+              <div className="pricing-card-header-top">
+                <h3 className="pricing-tier">Premium</h3>
+                <div className="pricing-toggle">
+                  <button
+                    className={`pricing-toggle-btn ${billing === 'monthly' ? 'active' : ''}`}
+                    onClick={() => setBilling('monthly')}
+                  >
+                    Monthly
+                  </button>
+                  <button
+                    className={`pricing-toggle-btn ${billing === 'annual' ? 'active' : ''}`}
+                    onClick={() => setBilling('annual')}
+                  >
+                    Annual
+                    <span className="pricing-save-badge">Save 16%</span>
+                  </button>
+                </div>
+              </div>
+              <p className="pricing-tier-desc">For serious property owners</p>
+            </div>
+            <div className="pricing-price-row">
+              <span className="pricing-amount">{billing === 'monthly' ? '₹99' : '₹999'}</span>
+              <span className="pricing-period">{billing === 'monthly' ? '/mo' : '/yr'}</span>
+            </div>
+            <ul className="pricing-features">
+              {PRO_FEATURES.map(f => (
+                <li key={f.text}><FeatureIcon type={f.icon} /> {f.text}</li>
+              ))}
+            </ul>
+            <button className="pricing-btn pricing-btn-primary" onClick={onSignIn}>
+              Get Started
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function Landing() {
   const { signIn, user, loading } = useAuth();
 
@@ -483,6 +579,7 @@ export default function Landing() {
               { label: 'Features', to: 'features' },
               { label: 'How it Works', to: 'how-it-works' },
               { label: 'Highlights', to: 'highlights' },
+              { label: 'Pricing', to: 'pricing' },
             ].map(l => (
               <a
                 key={l.to}
@@ -658,6 +755,9 @@ export default function Landing() {
           </div>
         </div>
       </section>
+
+      {/* ── PRICING ─────────────────────────────────────────────── */}
+      <PricingSection onSignIn={signIn} />
 
       {/* ── CTA ─────────────────────────────────────────────────── */}
       <section className="landing-cta" id="cta">
