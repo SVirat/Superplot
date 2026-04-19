@@ -24,6 +24,15 @@ A private property management vault for Indian households. Track real estate pro
 - **Subscription & Billing** — Free tier (3 properties, 1 invite) + Premium via Razorpay (₹99/mo or ₹999/yr)
 - **Responsive Design** — Works on desktop and mobile with light glassmorphism theme
 
+### Free vs Pro
+
+| | Free | Pro |
+|---|---|---|
+| Properties | Up to 3 | Unlimited |
+| Member invites | Up to 1 | Unlimited |
+| AI features (future) | ✗ | ✓ |
+| Price | ₹0 | ₹99/mo or ₹999/yr |
+
 ---
 
 ## Tech Stack
