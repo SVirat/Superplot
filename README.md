@@ -5,7 +5,7 @@
 <h1 align="center">Superplot</h1>
 
 <p align="center">
-  <strong>Secure, real-time property management solution</strong>
+  <strong>Secure, AI-powered property management solution</strong>
 </p>
 
 <p align="center">
