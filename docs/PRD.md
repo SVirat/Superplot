@@ -1,19 +1,19 @@
-# Outsite: Product Requirements Document
+# Superplot: Product Requirements Document
 
 **Version**: 1.1.0
 
 **Date**: April 20, 2026
 
-**Public URL**: https://outsite.vercel.app
+**Public URL**: https://superplot.vercel.app
 
-**Repository**: github.com/SVirat/Outsite
+**Repository**: github.com/SVirat/Superplot
 
 
 ---
 
 ## 1. Product Overview
 
-Outsite is a **private, self-hosted web application** for cataloging real estate properties and storing legal documentation securely via Google Drive. It is designed for an Indian household managing a portfolio of properties (flats, farms, villas, land) with an emphasis on tracking 15+ types of Indian legal/property documents per property.
+Superplot is a **private, self-hosted web application** for cataloging real estate properties and storing legal documentation securely via Google Drive. It is designed for an Indian household managing a portfolio of properties (flats, farms, villas, land) with an emphasis on tracking 15+ types of Indian legal/property documents per property.
 
 **Target users**: A single family — one admin (property owner) and optionally invited family members with varying access levels (contributor or view-only).
 
@@ -79,7 +79,7 @@ The app uses a multi-account RBAC system. Each user has their own account by def
 - Supabase Auth handles the OAuth flow using **PKCE** (Proof Key for Code Exchange)
 - OAuth scopes: `openid`, `email`, `profile`, `https://www.googleapis.com/auth/drive.file`
 - OAuth parameters: `access_type: offline`, `prompt: consent` (to get refresh token)
-- Sign-in page: app branding ("Outsite") + "Continue with Google" button
+- Sign-in page: app branding ("Superplot") + "Continue with Google" button
 
 ### 4.2 Auth Callback
 - After Google OAuth redirect, the app exchanges the code for a session
@@ -347,7 +347,7 @@ Used on both property cards (dashboard/properties page) and the property detail 
 - Server resolves both UUIDs and slugs via `resolveProperty()`
 
 ### 9.5 Page: Sign-In (`/sign-in`)
-- Centered card with app branding ("Outsite")
+- Centered card with app branding ("Superplot")
 - Single "Continue with Google" button
 - Redirects to dashboard on successful auth
 
@@ -673,7 +673,7 @@ Located at `docs/AI_CONTEXT.md`. Instructs the AI to:
 ## 20. File Structure
 
 ```
-Outsite/
+Superplot/
 ├── server.js                         # Express server + all API routes + Vite dev middleware
 ├── package.json
 ├── vite.config.js
@@ -724,8 +724,8 @@ Outsite/
 
 **Version**: 1.0.0
 **Date**: April 18, 2026
-**Public URL**: outsite.vercel.app
-**Repository**: github.com/SVirat/Outsite
+**Public URL**: superplot.vercel.app
+**Repository**: github.com/SVirat/Superplot
 
 ---
 
@@ -1309,7 +1309,7 @@ When `TEST_MODE=true` environment variable is set:
 - RLS security model
 - `drive.file` scope — app can only access files it creates
 - GDPR-style user rights (access, delete, export)
-- Contact: admin@outsite.vercel.app
+- Contact: admin@superplot.vercel.app
 
 ### 14.2 Terms and Conditions
 - Service provided as-is
