@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last Updated: April 18, 2026**
+**Last Updated: April 20, 2026**
 
 ## Introduction
 
@@ -29,6 +29,11 @@ You may voluntarily provide:
 - We store OAuth tokens (access and refresh tokens) issued by Google to interact with your Google Drive on your behalf
 - These tokens are stored securely in our database and are used solely to manage files in your Google Drive
 
+### AI API Keys (BYOK)
+- If you choose to provide your own AI API key (Bring Your Own Key), it is stored in our database associated with your account
+- Your key is used only for processing your requests and is never shared with other users
+- You can view a masked version of your key, replace it, or delete it at any time from Settings
+
 ## How We Use Your Information
 
 We use your information exclusively to:
@@ -36,12 +41,15 @@ We use your information exclusively to:
 - Display and manage your property portfolio within the app
 - Upload, organize, and retrieve documents from your Google Drive
 - Provide search functionality across your properties
+- **AI features**: Extract text from uploaded documents, generate embeddings for semantic search, and answer your questions about your documents and portfolio
+- **AI processing**: Document text is chunked and stored as embeddings in our database for retrieval-augmented generation (RAG)
 
 We do **not**:
 - Sell, rent, or share your personal data with third parties
 - Use your data for advertising or marketing purposes
 - Access any Google Drive files outside the "PropertyVault" folder
 - Train AI models on your data
+- Share your document content or AI queries with other users
 
 ## Data Storage & Security
 
@@ -80,6 +88,16 @@ We use the following third-party services:
 | [Google](https://policies.google.com/privacy) | Authentication & Drive storage | Google Privacy Policy |
 | [Supabase](https://supabase.com/privacy) | Database & authentication | Supabase Privacy Policy |
 | [Vercel](https://vercel.com/legal/privacy-policy) | Application hosting | Vercel Privacy Policy |
+| [Google AI (Gemini)](https://ai.google.dev/terms) | AI chat, embeddings, document OCR | Google AI Terms |
+| [OpenAI](https://openai.com/privacy) | AI fallback provider | OpenAI Privacy Policy |
+| [Anthropic](https://www.anthropic.com/privacy) | AI fallback provider | Anthropic Privacy Policy |
+| [Razorpay](https://razorpay.com/privacy/) | Payment processing | Razorpay Privacy Policy |
+
+### AI Data Processing
+- When you use AI features, your document text and questions are sent to the configured AI provider (Gemini, OpenAI, or Anthropic) for processing
+- If you use BYOK, your data is sent to the provider associated with your key
+- AI providers may have their own data retention policies — refer to their privacy policies above
+- We do not send your data to AI providers unless you actively use AI features
 
 ## Children's Privacy
 

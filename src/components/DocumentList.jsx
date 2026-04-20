@@ -1,11 +1,33 @@
 import { useState } from 'react';
-import { CircleCheck, CircleAlert, ChevronDown, ChevronRight, Upload, Eye, Trash2, AlertTriangle } from 'lucide-react';
+import { CircleCheck, CircleAlert, ChevronDown, ChevronRight, Upload, Eye, Trash2, AlertTriangle, Loader2, CheckCircle, XCircle } from 'lucide-react';
 import { DOC_TYPES, docLabel, docTip } from '../lib/constants.js';
 import UploadDialog from './UploadDialog.jsx';
 
-function DeleteConfirmDialog({ fileName, onConfirm, onCancel }) {
+export function DeleteConfirmDialog({ fileName, onConfirm, onCancel }) {
+  const [deleting, setDeleting] = useState(false);
+  const [result, setResult] = useState(null); // 'success' | 'error'
+  const [errorMsg, setErrorMsg] = useState('');
+
+  async function handleDelete() {
+    setDeleting(true);
+    setResult(null);
+    // Force reload if delete takes too long
+    const reloadTimer = setTimeout(() => window.location.reload(), 5000);
+    try {
+      await onConfirm();
+      clearTimeout(reloadTimer);
+      setResult('success');
+      setTimeout(() => onCancel(), 800);
+    } catch (err) {
+      clearTimeout(reloadTimer);
+      setResult('error');
+      setErrorMsg(err?.message || 'Failed to delete document');
+      setDeleting(false);
+    }
+  }
+
   return (
-    <div className="dialog-overlay" onClick={onCancel}>
+    <div className="dialog-overlay" onClick={!deleting ? onCancel : undefined}>
       <div className="dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
         <div className="dialog-header">
           <h3 className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -14,18 +36,43 @@ function DeleteConfirmDialog({ fileName, onConfirm, onCancel }) {
           </h3>
         </div>
         <div className="dialog-body">
-          <p className="confirm-text">
-            Are you sure you want to delete <strong>{fileName}</strong>?
-          </p>
-          <p className="confirm-text" style={{ color: 'var(--danger-text)', fontSize: '0.8125rem' }}>
-            This will permanently remove the file from your Google Drive. This action cannot be undone.
-          </p>
+          {result === 'success' ? (
+            <div style={{ textAlign: 'center', padding: '12px 0' }}>
+              <CheckCircle size={32} style={{ color: 'var(--success, #22c55e)' }} />
+              <p className="confirm-text" style={{ marginTop: 8, fontWeight: 500 }}>Deleted successfully</p>
+            </div>
+          ) : deleting ? (
+            <div style={{ textAlign: 'center', padding: '12px 0' }}>
+              <Loader2 size={28} className="spin" style={{ color: 'var(--primary)' }} />
+              <p className="confirm-text" style={{ marginTop: 8 }}>Deleting <strong>{fileName}</strong>...</p>
+              <p className="text-xs text-lighter" style={{ marginTop: 4 }}>Removing from Google Drive and database</p>
+            </div>
+          ) : (
+            <>
+              <p className="confirm-text">
+                Are you sure you want to delete <strong>{fileName}</strong>?
+              </p>
+              <p className="confirm-text" style={{ color: 'var(--danger-text)', fontSize: '0.8125rem' }}>
+                This will permanently remove the file from your Google Drive. This action cannot be undone.
+              </p>
+              {result === 'error' && (
+                <div className="upload-error-banner" style={{ marginTop: 8 }}>
+                  <XCircle size={16} />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
+            </>
+          )}
         </div>
         <div className="dialog-footer">
-          <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
-          <button className="btn btn-danger" onClick={onConfirm}>
-            <Trash2 size={14} /> Delete Permanently
-          </button>
+          {!deleting && result !== 'success' && (
+            <>
+              <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+              <button className="btn btn-danger" onClick={handleDelete}>
+                <Trash2 size={14} /> Delete Permanently
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -82,7 +129,7 @@ function DocumentSlot({ type, files, canUpload, canDelete, onDelete, propertyId,
       {deleteTarget && (
         <DeleteConfirmDialog
           fileName={deleteTarget.file_name}
-          onConfirm={() => { onDelete(deleteTarget.id); setDeleteTarget(null); }}
+          onConfirm={() => onDelete(deleteTarget.id)}
           onCancel={() => setDeleteTarget(null)}
         />
       )}
@@ -91,7 +138,7 @@ function DocumentSlot({ type, files, canUpload, canDelete, onDelete, propertyId,
           docType={type}
           propertyId={propertyId}
           onClose={() => setShowUpload(false)}
-          onSuccess={() => { setShowUpload(false); onUploadSuccess(); }}
+          onSuccess={(docs) => { setShowUpload(false); onUploadSuccess(docs); }}
         />
       )}
     </div>

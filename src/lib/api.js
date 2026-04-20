@@ -93,12 +93,20 @@ export async function apiFetch(path, opts = {}) {
     clearTimeout(timeout);
     if (err.name === 'AbortError') {
       // Retry once on timeout (covers serverless cold starts)
-      const res = await fetch(path, { ...opts, headers });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Request failed: ${res.status}`);
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), 30000);
+      try {
+        const res = await fetch(path, { ...opts, headers, signal: controller2.signal });
+        clearTimeout(timeout2);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `Request failed: ${res.status}`);
+        }
+        return res.json();
+      } catch (retryErr) {
+        clearTimeout(timeout2);
+        throw retryErr;
       }
-      return res.json();
     }
     throw err;
   }
@@ -203,6 +211,66 @@ export const api = {
 
   cancelSubscription: () =>
     apiFetch('/api/subscription/cancel', { method: 'POST' }),
+
+  // AI
+  askAI: async (question, propertyId, onProgress) => {
+    const supabase = getSupabase();
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+
+    const res = await fetch('/api/ai/ask', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ question, propertyId }),
+    });
+
+    if (!res.ok && res.headers.get('content-type')?.includes('application/json')) {
+      const err = await res.json();
+      throw new Error(err.error || 'AI request failed');
+    }
+
+    // Read SSE stream
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result = null;
+    let streamError = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE lines
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          if (event.type === 'progress' && onProgress) {
+            onProgress(event.message);
+          } else if (event.type === 'done') {
+            result = { answer: event.answer, chunksUsed: event.chunksUsed };
+          } else if (event.type === 'error') {
+            streamError = new Error(event.error);
+          }
+        } catch (_) { /* ignore JSON parse errors */ }
+      }
+
+      if (streamError) break;
+    }
+
+    if (streamError) throw streamError;
+    if (!result) throw new Error('No response from AI');
+    return result;
+  },
+  getAIStatus: () => apiFetch('/api/ai/status'),
+  reprocessAI: () => apiFetch('/api/ai/reprocess', { method: 'POST' }),
 };
 
 // ── Cache keys ───────────────────────────────────────────────────────

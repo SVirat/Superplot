@@ -1,45 +1,99 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash2, MapPin, ExternalLink, Image, Upload, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2, MapPin, ExternalLink, Image, Upload, Loader2, FolderOpen, Camera } from 'lucide-react';
 import { useAuth } from '../lib/auth.jsx';
-import { api, useCachedData, CacheKeys, invalidateProperties, updateCachedProperty } from '../lib/api.js';
+import { api, invalidateProperties, apiFetch } from '../lib/api.js';
+import { getSupabase } from '../lib/supabase.js';
 import { docScore, ownershipLabel, slugify } from '../lib/constants.js';
 import { formatCurrency, formatDate, formatNumber } from '../lib/format.js';
-import DocumentList from '../components/DocumentList.jsx';
+import DocumentList, { DeleteConfirmDialog } from '../components/DocumentList.jsx';
 import UploadDialog from '../components/UploadDialog.jsx';
 import MapPreview from '../components/MapPreview.jsx';
+
+// Cache for thumbnail blob URLs to avoid re-fetching
+const _thumbCache = new Map();
+
+function PhotoThumbnail({ docId }) {
+  const [src, setSrc] = useState(_thumbCache.get(docId) || null);
+  const [loading, setLoading] = useState(!_thumbCache.has(docId));
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (_thumbCache.has(docId)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const sb = getSupabase();
+        const { data: { session } } = await sb.auth.getSession();
+        if (!session?.access_token || cancelled) return;
+        const hdrs = { Authorization: `Bearer ${session.access_token}` };
+        const accountId = localStorage.getItem('activeAccountId');
+        if (accountId) hdrs['X-Account-Id'] = accountId;
+        const res = await fetch(`/api/documents/${docId}/thumbnail`, { headers: hdrs });
+        if (!res.ok || cancelled) { setError(true); setLoading(false); return; }
+        const blob = await res.blob();
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        _thumbCache.set(docId, url);
+        setSrc(url);
+      } catch { setError(true); }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [docId]);
+
+  if (error) return <Image size={24} />;
+  if (loading) return <Loader2 size={24} className="spin" />;
+  return <img src={src} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
+}
 
 export default function PropertyDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [property, loading, refresh] = useCachedData(CacheKeys.property(id), () => api.getProperty(id));
-  const [deletedDocIds, setDeletedDocIds] = useState(new Set());
+
+  // ── Fully local state — no cache subscriptions ──
+  const [property, setProperty] = useState(null);
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPhotoUpload, setShowPhotoUpload] = useState(false);
   const [photoDeleteTarget, setPhotoDeleteTarget] = useState(null);
+
+  // Fetch property once on mount / when id changes
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.getProperty(id).then(data => {
+      if (cancelled) return;
+      setProperty(data);
+      setDocs(data?.documents || []);
+      setLoading(false);
+    }).catch(err => {
+      console.error('Failed to load property:', err);
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [id]);
 
   const isAdmin = user?.role === 'admin';
   const canUpload = isAdmin || user?.role === 'family_contributor';
   const canDelete = isAdmin;
 
-  const visibleDocs = useMemo(() => {
-    if (!property?.documents) return [];
-    return property.documents.filter(d => !deletedDocIds.has(d.id));
-  }, [property?.documents, deletedDocIds]);
+  const photos = useMemo(() => docs.filter(d => d.type === 'photos'), [docs]);
+  const score = useMemo(() => docScore(docs), [docs]);
 
-  const photos = useMemo(() => visibleDocs.filter(d => d.type === 'photos'), [visibleDocs]);
-  const score = useMemo(() => docScore(visibleDocs), [visibleDocs]);
+  function handleUploadSuccess(newDocs) {
+    if (newDocs?.length) {
+      setDocs(prev => [...prev, ...newDocs]);
+    }
+    invalidateProperties();
+  }
 
-  function handleDeleteDoc(docId) {
-    setDeletedDocIds(prev => new Set(prev).add(docId));
-    api.deleteDocument(docId)
-      .then(() => { invalidateProperties(); })
-      .catch(err => {
-        console.error('Delete failed:', err);
-        // Undo optimistic removal
-        setDeletedDocIds(prev => { const n = new Set(prev); n.delete(docId); return n; });
-      });
+  async function handleDeleteDoc(docId) {
+    await api.deleteDocument(docId);
+    setDocs(prev => prev.filter(d => d.id !== docId));
+    invalidateProperties();
   }
 
   function handleDeleteProperty() {
@@ -199,15 +253,15 @@ export default function PropertyDetail() {
         <div className="detail-main">
           {/* Documents */}
           <div className="card">
-            <div className="card-header"><h3 className="card-title">Document Vault</h3></div>
+            <div className="card-header"><h3 className="card-title"><FolderOpen size={18} /> Document Vault</h3></div>
             <div className="card-body">
               <DocumentList
-                documents={visibleDocs}
+                documents={docs}
                 canUpload={canUpload}
                 canDelete={canDelete}
                 propertyId={property.id}
                 onDelete={handleDeleteDoc}
-                onUploadSuccess={() => { refresh(); invalidateProperties(); }}
+                onUploadSuccess={handleUploadSuccess}
               />
             </div>
           </div>
@@ -215,7 +269,7 @@ export default function PropertyDetail() {
           {/* Photos */}
           <div className="card">
             <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 className="card-title">Photos</h3>
+              <h3 className="card-title"><Camera size={18} /> Photos</h3>
               {canUpload && (
                 <button className="btn btn-secondary btn-sm" onClick={() => setShowPhotoUpload(true)}>
                   <Upload size={14} /> Upload
@@ -237,7 +291,7 @@ export default function PropertyDetail() {
                 <div className="photo-grid">
                   {photos.map(p => (
                     <div key={p.id} className="photo-thumb">
-                      <Image size={24} />
+                      <PhotoThumbnail docId={p.id} />
                       <div className="photo-thumb-overlay">
                         <a href={p.view_url} target="_blank" rel="noopener noreferrer" className="btn btn-sm" style={{ color: '#fff', fontSize: '0.75rem' }}>
                           View in Drive
@@ -284,36 +338,20 @@ export default function PropertyDetail() {
           docType="photos"
           propertyId={property.id}
           onClose={() => setShowPhotoUpload(false)}
-          onSuccess={() => { setShowPhotoUpload(false); refresh(); invalidateProperties(); }}
+          onSuccess={(newDocs) => {
+            setShowPhotoUpload(false);
+            handleUploadSuccess(newDocs);
+          }}
         />
       )}
 
       {/* Photo Delete Confirmation */}
       {photoDeleteTarget && (
-        <div className="dialog-overlay" onClick={() => setPhotoDeleteTarget(null)}>
-          <div className="dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
-            <div className="dialog-header">
-              <h3 className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <AlertTriangle size={18} style={{ color: 'var(--warning)' }} />
-                Delete Photo
-              </h3>
-            </div>
-            <div className="dialog-body">
-              <p className="confirm-text">
-                Are you sure you want to delete <strong>{photoDeleteTarget.file_name}</strong>?
-              </p>
-              <p className="confirm-text" style={{ color: 'var(--danger-text)', fontSize: '0.8125rem' }}>
-                This will permanently remove the file from your Google Drive. This action cannot be undone.
-              </p>
-            </div>
-            <div className="dialog-footer">
-              <button className="btn btn-secondary" onClick={() => setPhotoDeleteTarget(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={() => { handleDeleteDoc(photoDeleteTarget.id); setPhotoDeleteTarget(null); }}>
-                <Trash2 size={14} /> Delete Permanently
-              </button>
-            </div>
-          </div>
-        </div>
+        <DeleteConfirmDialog
+          fileName={photoDeleteTarget.file_name}
+          onConfirm={() => handleDeleteDoc(photoDeleteTarget.id)}
+          onCancel={() => setPhotoDeleteTarget(null)}
+        />
       )}
     </div>
   );

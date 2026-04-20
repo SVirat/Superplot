@@ -28,11 +28,11 @@ const FEATURES = [
     bg: 'rgba(5, 150, 105, 0.1)',
   },
   {
-    icon: Users,
-    title: 'Family Access Control',
-    desc: 'Invite family members with fine-grained roles — admin, contributor, or view-only. Everyone sees what they need.',
-    color: '#D97706',
-    bg: 'rgba(217, 119, 6, 0.1)',
+    icon: Sparkles,
+    title: 'AI Functionality',
+    desc: 'Ask questions about your documents and portfolio. Superplot AI extracts, indexes, and understands your property records.',
+    color: '#7C3AED',
+    bg: 'rgba(124, 58, 237, 0.1)',
   },
   {
     icon: MapPin,
@@ -49,11 +49,11 @@ const FEATURES = [
     bg: 'rgba(14, 165, 233, 0.1)',
   },
   {
-    icon: Lock,
-    title: 'Bank-Grade Security',
-    desc: 'Supabase authentication with Google OAuth. Row-level security policies ensure data isolation between accounts.',
-    color: '#1D4ED8',
-    bg: 'rgba(29, 78, 216, 0.1)',
+    icon: Users,
+    title: 'Family Access Control',
+    desc: 'Invite family members with fine-grained roles — admin, contributor, or view-only. Everyone sees what they need.',
+    color: '#D97706',
+    bg: 'rgba(217, 119, 6, 0.1)',
   },
 ];
 
@@ -412,6 +412,117 @@ function HeroDashboardMockup() {
   );
 }
 
+const AI_EXAMPLES = [
+  {
+    question: 'Which properties are missing an encumbrance certificate?',
+    answer: <><strong>2 properties</strong> are missing an Encumbrance Certificate:</>,
+    items: [
+      { icon: AlertTriangle, text: 'Whitefield Villa — Bangalore' },
+      { icon: AlertTriangle, text: 'Indiranagar Flat — Bangalore' },
+    ],
+    source: 'Based on 24 documents across 5 properties',
+  },
+  {
+    question: 'What is the total value of my portfolio?',
+    answer: <><strong>₹4.85 Cr</strong> total across your 5 properties:</>,
+    items: [
+      { icon: BarChart3, text: 'Whitefield Villa — ₹2.1 Cr' },
+      { icon: BarChart3, text: 'Indiranagar Flat — ₹1.4 Cr' },
+      { icon: BarChart3, text: 'Mysore Farmland — ₹1.35 Cr' },
+    ],
+    source: 'Calculated from property details',
+  },
+  {
+    question: 'Summarize my Whitefield Villa sale deed.',
+    answer: <>The sale deed was executed on <strong>12 Jan 2022</strong> for <strong>₹2.1 Cr</strong>:</>,
+    items: [
+      { icon: FileText, text: 'Seller: Ramesh Kumar · Buyer: You' },
+      { icon: FileText, text: 'Plot 42, Whitefield · 2,400 sq ft' },
+    ],
+    source: 'Extracted from Sale_Deed_Whitefield.pdf',
+  },
+];
+
+function AIChatVisual() {
+  const [phase, setPhase] = useState(0);
+  const [exIdx, setExIdx] = useState(0);
+  // 0 = idle, 1 = user msg, 2 = AI typing, 3 = AI answer, 4 = sources
+  useEffect(() => {
+    const timers = [];
+    let idx = 0;
+    const run = () => {
+      setExIdx(idx % AI_EXAMPLES.length);
+      setPhase(0);
+      timers.push(setTimeout(() => setPhase(1), 600));
+      timers.push(setTimeout(() => setPhase(2), 1800));
+      timers.push(setTimeout(() => setPhase(3), 3200));
+      timers.push(setTimeout(() => setPhase(4), 4200));
+      idx++;
+      timers.push(setTimeout(() => run(), 9000));
+    };
+    run();
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  const ex = AI_EXAMPLES[exIdx];
+
+  return (
+    <div className="ai-chat-visual">
+      <div className="ai-chat-visual-header">
+        <Sparkles size={16} />
+        <span>Superplot AI</span>
+        <span className="ai-chat-visual-badge">Premium</span>
+      </div>
+
+      <div className="ai-chat-visual-body">
+        {/* User message */}
+        <div className={`ai-chat-visual-msg user ${phase >= 1 ? 'visible' : ''}`}>
+          <div className="ai-chat-visual-bubble user">
+            {ex.question}
+          </div>
+        </div>
+
+        {/* AI typing indicator */}
+        <div className={`ai-chat-visual-msg ai ${phase === 2 ? 'visible' : ''}`}>
+          <div className="ai-chat-visual-bubble ai">
+            <span className="ai-typing-dots">
+              <span /><span /><span />
+            </span>
+          </div>
+        </div>
+
+        {/* AI answer */}
+        <div className={`ai-chat-visual-msg ai ${phase >= 3 ? 'visible' : ''}`}>
+          <div className="ai-chat-visual-bubble ai">
+            {ex.answer}
+            <div className="ai-chat-visual-list">
+              {ex.items.map((item, i) => (
+                <div className="ai-chat-visual-list-item" key={i}>
+                  <item.icon size={13} />
+                  <span>{item.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Sources pill */}
+        <div className={`ai-chat-visual-sources ${phase >= 4 ? 'visible' : ''}`}>
+          <FileText size={12} />
+          <span>{ex.source}</span>
+        </div>
+      </div>
+
+      {/* Dot indicators */}
+      <div className="ai-chat-visual-dots">
+        {AI_EXAMPLES.map((_, i) => (
+          <span key={i} className={`ai-chat-visual-dot ${i === exIdx ? 'active' : ''}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PropertyCardVisual() {
   return (
     <div className="landing-prop-visual">
@@ -577,7 +688,7 @@ export default function Landing() {
           <div className="landing-nav-links">
             {[
               { label: 'Features', to: 'features' },
-              { label: 'How it Works', to: 'how-it-works' },
+              { label: 'How It Works', to: 'how-it-works' },
               { label: 'Highlights', to: 'highlights' },
               { label: 'Pricing', to: 'pricing' },
             ].map(l => (
@@ -608,8 +719,7 @@ export default function Landing() {
             <span className="landing-h1-accent">beautifully organized.</span>
           </h1>
           <p className="landing-hero-sub">
-            Superplot is the private vault for your real estate portfolio. Catalog every property, 
-            store every legal document in your own Google Drive, and share access with family.
+            The secure, AI-powered solution for your real-estate portfolio
           </p>
           <div className="landing-hero-actions">
             <button className="landing-hero-btn" onClick={signIn}>
@@ -617,7 +727,6 @@ export default function Landing() {
               Get Started with Google
               <ArrowRight size={18} />
             </button>
-            <p className="landing-hero-note">Your data stays in your Google Drive</p>
           </div>
         </div>
 
@@ -633,12 +742,15 @@ export default function Landing() {
           <p className="landing-overline">Everything you need</p>
           <h2 className="landing-h2">Property management,<br />reimagined for families.</h2>
           <div className="landing-features-grid">
-            {FEATURES.map((f) => (
-              <div className="landing-feature-card" key={f.title}>
-                <div className="landing-feature-icon" style={{ background: f.bg, color: f.color }}>
-                  <f.icon size={24} />
+            {FEATURES.map((f, i) => (
+              <div className="landing-feature-card" key={f.title} style={{ '--fc': f.color, '--fb': f.bg, animationDelay: `${i * 80}ms` }}>
+                <div className="landing-feature-accent" />
+                <div className="landing-feature-top">
+                  <div className="landing-feature-icon" style={{ background: f.bg, color: f.color }}>
+                    <f.icon size={22} />
+                  </div>
+                  <h3>{f.title}</h3>
                 </div>
-                <h3>{f.title}</h3>
                 <p>{f.desc}</p>
               </div>
             ))}
@@ -670,13 +782,40 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* ── HIGHLIGHTS — Property Card ──────────────────────────── */}
-      <section className="landing-highlights" id="highlights">
+      {/* ── HIGHLIGHTS HEADER ───────────────────────────────────── */}
+      <section className="landing-highlights-header" id="highlights">
+        <div className="landing-section-inner">
+          <p className="landing-overline">Highlights</p>
+          <h2 className="landing-h2">See what makes Superplot different</h2>
+        </div>
+      </section>
+
+      {/* ── HIGHLIGHTS — AI Functionality ───────────────────────── */}
+      <section className="landing-highlights">
         <div className="landing-section-inner">
           <div className="landing-highlight-card">
             <div className="landing-highlight-visual">
-              <PropertyCardVisual />
+              <AIChatVisual />
             </div>
+            <div className="landing-highlight-text">
+              <p className="landing-overline">AI-Powered</p>
+              <h2 className="landing-h2">Ask anything about your portfolio.</h2>
+              <p className="landing-highlight-desc">Superplot AI reads, indexes, and understands every document you upload. Ask natural language questions and get instant, source-backed answers across your entire property portfolio.</p>
+              <ul className="landing-check-list">
+                <li><Check size={18} /> Portfolio-wide intelligence</li>
+                <li><Check size={18} /> Automatic document OCR &amp; indexing</li>
+                <li><Check size={18} /> Multi-provider AI (Gemini, OpenAI, Claude)</li>
+                <li><Check size={18} /> Bring your own API key</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── HIGHLIGHTS — Property Card ──────────────────────────── */}
+      <section className="landing-highlights">
+        <div className="landing-section-inner">
+          <div className="landing-highlight-card reverse">
             <div className="landing-highlight-text">
               <p className="landing-overline">Track everything</p>
               <h2 className="landing-h2">Every property. Every document. One dashboard.</h2>
@@ -687,12 +826,15 @@ export default function Landing() {
                 <li><Check size={18} /> Photo galleries with Street View</li>
               </ul>
             </div>
+            <div className="landing-highlight-visual">
+              <PropertyCardVisual />
+            </div>
           </div>
         </div>
       </section>
 
       {/* ── HIGHLIGHTS — Document Types ──────────────────────────── */}
-      <section className="landing-highlights alt">
+      <section className="landing-highlights">
         <div className="landing-section-inner">
           <div className="landing-highlight-card reverse">
             <div className="landing-highlight-text">

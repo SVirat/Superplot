@@ -13,6 +13,7 @@ create table if not exists public.user_profiles (
     check (role in ('admin', 'family_view', 'family_contributor')),
   google_access_token  text,
   google_refresh_token text,
+  ai_api_key           text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -235,3 +236,73 @@ create policy "Users can view own subscription"
 create trigger trg_subscriptions_updated_at
   before update on public.subscriptions
   for each row execute function public.update_updated_at();
+
+-- ============================================================
+-- 6. Document Chunks for AI RAG — pgvector
+-- ============================================================
+
+create extension if not exists vector;
+
+create table if not exists public.document_chunks (
+  id uuid primary key default gen_random_uuid(),
+  document_id uuid not null references public.documents(id) on delete cascade,
+  property_id uuid not null references public.properties(id) on delete cascade,
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  content text not null,
+  embedding vector(768) not null,
+  chunk_index integer not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists document_chunks_embedding_idx
+  on public.document_chunks using ivfflat (embedding vector_cosine_ops)
+  with (lists = 100);
+
+create index if not exists document_chunks_owner_idx
+  on public.document_chunks (owner_id);
+
+alter table public.document_chunks enable row level security;
+
+create policy "Owner can select chunks"
+  on public.document_chunks for select
+  using (auth.uid() = owner_id);
+
+create policy "Service role can manage chunks"
+  on public.document_chunks for all
+  using (true)
+  with check (true);
+
+-- RPC for vector similarity search
+-- Accept embedding as text (JSON array) to avoid PostgREST schema cache issues with vector type
+create or replace function match_document_chunks(
+  query_embedding_text text,
+  owner_filter uuid,
+  property_filter uuid default null,
+  match_count int default 8
+)
+returns table (
+  id uuid,
+  content text,
+  document_id uuid,
+  property_id uuid,
+  similarity float
+)
+language plpgsql
+as $$
+declare
+  qe vector(768) := query_embedding_text::vector;
+begin
+  return query
+    select
+      dc.id,
+      dc.content,
+      dc.document_id,
+      dc.property_id,
+      1 - (dc.embedding <=> qe) as similarity
+    from document_chunks dc
+    where dc.owner_id = owner_filter
+      and (property_filter is null or dc.property_id = property_filter)
+    order by dc.embedding <=> qe
+    limit match_count;
+end;
+$$;

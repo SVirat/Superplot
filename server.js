@@ -6,6 +6,13 @@ import crypto from 'crypto';
 import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
+// pdf-parse v1: import inner module to avoid test-file-loading bug at top level
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+const pdfParse = _require('pdf-parse/lib/pdf-parse.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,6 +51,12 @@ const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 const RAZORPAY_PLAN_MONTHLY = process.env.RAZORPAY_PLAN_MONTHLY || '';
 const RAZORPAY_PLAN_ANNUAL = process.env.RAZORPAY_PLAN_ANNUAL || '';
 const PREMIUM_BACKDOOR_EMAILS = ['svirat@gmail.com'];
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY || '';
+const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+const anthropic = CLAUDE_API_KEY ? new Anthropic({ apiKey: CLAUDE_API_KEY }) : null;
 
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
@@ -238,6 +251,396 @@ async function getUserPlan(userId, email) {
     // Table may not exist yet or no rows — treat as free
   }
   return { plan: 'free', status: 'active', isPremium: false };
+}
+
+// ── BYOK (Bring Your Own Key) HELPERS ─────────────────────────────────────────
+function detectKeyProvider(apiKey) {
+  if (!apiKey || typeof apiKey !== 'string') return null;
+  const k = apiKey.trim();
+  if (k.startsWith('sk-ant-')) return 'claude';
+  if (k.startsWith('sk-')) return 'openai';
+  if (k.startsWith('AIza')) return 'gemini';
+  return null;
+}
+
+function createUserAIClients(userApiKey) {
+  const provider = detectKeyProvider(userApiKey);
+  if (!provider) return { provider: null, genAI: null, openai: null, anthropic: null };
+  const key = userApiKey.trim();
+  return {
+    provider,
+    genAI: provider === 'gemini' ? new GoogleGenerativeAI(key) : null,
+    openai: provider === 'openai' ? new OpenAI({ apiKey: key }) : null,
+    anthropic: provider === 'claude' ? new Anthropic({ apiKey: key }) : null,
+  };
+}
+
+// ── AI / RAG HELPERS ──────────────────────────────────────────────────────────
+const CHUNK_SIZE = 500;
+const CHUNK_OVERLAP = 100;
+const AI_PROVIDERS = ['gemini', 'openai', 'claude'].filter(p => {
+  if (p === 'gemini') return !!genAI;
+  if (p === 'openai') return !!openai;
+  if (p === 'claude') return !!anthropic;
+});
+
+function chunkText(text) {
+  const chunks = [];
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return chunks;
+  let start = 0;
+  while (start < clean.length) {
+    const end = Math.min(start + CHUNK_SIZE, clean.length);
+    chunks.push(clean.slice(start, end));
+    start += CHUNK_SIZE - CHUNK_OVERLAP;
+  }
+  return chunks;
+}
+
+// ── EMBEDDING (with fallback: Gemini → OpenAI) ──────────────────────────────
+// Note: Claude doesn't have an embedding model, so only Gemini and OpenAI
+// All functions accept optional `clients` override for BYOK
+async function embedWithGemini(text, apiKey) {
+  const key = apiKey || process.env.GEMINI_API_KEY;
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${key}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: { parts: [{ text }] }, outputDimensionality: 768 }),
+    }
+  );
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini embedding ${res.status}: ${errText}`);
+  }
+  const data = await res.json();
+  return data.embedding.values; // 768 dimensions
+}
+
+async function embedWithOpenAI(text, client) {
+  const c = client || openai;
+  const result = await c.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: text,
+    dimensions: 768, // Match Gemini's 768 dimensions
+  });
+  return result.data[0].embedding;
+}
+
+async function embedSingle(text, userClients) {
+  // Build provider list — user BYOK key first, then platform keys
+  const providers = [];
+  if (userClients?.genAI) providers.push(['gemini(user)', (t) => embedWithGemini(t, userClients.genAI.apiKey)]);
+  if (userClients?.openai) providers.push(['openai(user)', (t) => embedWithOpenAI(t, userClients.openai)]);
+  if (genAI) providers.push(['gemini', embedWithGemini]);
+  if (openai) providers.push(['openai', embedWithOpenAI]);
+
+  if (!providers.length) throw new Error('No embedding provider configured');
+
+  let lastErr;
+  for (let i = 0; i < providers.length; i++) {
+    const [name, fn] = providers[i];
+    try {
+      return await fn(text);
+    } catch (err) {
+      console.warn(`[ai] ${name} embedding failed: ${err.message}`);
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
+// ── LLM CHAT (with fallback: Gemini → OpenAI → Claude) ─────────────────────
+async function chatWithGemini(prompt, client) {
+  const c = client || genAI;
+  const model = c.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+  try {
+    const result = await model.generateContent(prompt);
+    return result.response.text();
+  } catch (err) {
+    if (err.message?.includes('429') || err.message?.includes('Too Many Requests')) {
+      console.log('[ai] Gemini rate limited, retrying in 10s...');
+      await new Promise(r => setTimeout(r, 10000));
+      const result = await model.generateContent(prompt);
+      return result.response.text();
+    }
+    throw err;
+  }
+}
+
+async function chatWithOpenAI(prompt, client) {
+  const c = client || openai;
+  const result = await c.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 1024,
+  });
+  return result.choices[0].message.content;
+}
+
+async function chatWithClaude(prompt, client) {
+  const c = client || anthropic;
+  const result = await c.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  return result.content[0].text;
+}
+
+async function chatLLM(prompt, userClients) {
+  // User BYOK key first, then platform keys
+  const providers = [];
+  if (userClients?.genAI) providers.push(['gemini(user)', (p) => chatWithGemini(p, userClients.genAI)]);
+  if (userClients?.openai) providers.push(['openai(user)', (p) => chatWithOpenAI(p, userClients.openai)]);
+  if (userClients?.anthropic) providers.push(['claude(user)', (p) => chatWithClaude(p, userClients.anthropic)]);
+  if (genAI) providers.push(['gemini', chatWithGemini]);
+  if (openai) providers.push(['openai', chatWithOpenAI]);
+  if (anthropic) providers.push(['claude', chatWithClaude]);
+
+  if (!providers.length) throw new Error('No AI provider configured');
+
+  for (let i = 0; i < providers.length; i++) {
+    const [name, fn] = providers[i];
+    try {
+      const answer = await fn(prompt);
+      if (i > 0) console.log(`[ai] Using fallback provider: ${name}`);
+      return answer;
+    } catch (err) {
+      console.warn(`[ai] ${name} chat failed: ${err.message}`);
+      if (i === providers.length - 1) throw err;
+    }
+  }
+}
+
+// ── IMAGE TEXT EXTRACTION (Gemini Vision → OpenAI Vision → Claude Vision) ───
+async function extractTextFromImageGemini(buffer, mimeType, client) {
+  const c = client || genAI;
+  const model = c.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+  const result = await model.generateContent([
+    { text: 'Extract ALL text from this document image. Return only the text content, nothing else. If there is handwriting, do your best to read it.' },
+    { inlineData: { data: buffer.toString('base64'), mimeType } },
+  ]);
+  return result.response.text();
+}
+
+async function extractTextFromImageOpenAI(buffer, mimeType, client) {
+  const c = client || openai;
+  const b64 = buffer.toString('base64');
+  const result = await c.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Extract ALL text from this document image. Return only the text content, nothing else. If there is handwriting, do your best to read it.' },
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${b64}` } },
+      ],
+    }],
+    max_tokens: 4096,
+  });
+  return result.choices[0].message.content;
+}
+
+async function extractTextFromImageClaude(buffer, mimeType, client) {
+  const c = client || anthropic;
+  const b64 = buffer.toString('base64');
+  const mediaType = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+  const result = await c.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 4096,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Extract ALL text from this document image. Return only the text content, nothing else. If there is handwriting, do your best to read it.' },
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } },
+      ],
+    }],
+  });
+  return result.content[0].text;
+}
+
+async function extractTextFromImage(buffer, mimeType, userClients) {
+  const providers = [];
+  if (userClients?.genAI) providers.push(['gemini(user)', (b, m) => extractTextFromImageGemini(b, m, userClients.genAI)]);
+  if (userClients?.openai) providers.push(['openai(user)', (b, m) => extractTextFromImageOpenAI(b, m, userClients.openai)]);
+  if (userClients?.anthropic) providers.push(['claude(user)', (b, m) => extractTextFromImageClaude(b, m, userClients.anthropic)]);
+  if (genAI) providers.push(['gemini', extractTextFromImageGemini]);
+  if (openai) providers.push(['openai', extractTextFromImageOpenAI]);
+  if (anthropic) providers.push(['claude', extractTextFromImageClaude]);
+
+  if (!providers.length) throw new Error('No vision provider configured');
+
+  for (let i = 0; i < providers.length; i++) {
+    const [name, fn] = providers[i];
+    try {
+      return await fn(buffer, mimeType);
+    } catch (err) {
+      console.warn(`[ai] ${name} vision OCR failed: ${err.message}`);
+      if (i === providers.length - 1) throw err;
+    }
+  }
+}
+
+// ── DOCUMENT PROCESSING ─────────────────────────────────────────────────────
+const SUPPORTED_PDF = ['.pdf'];
+const SUPPORTED_IMAGES = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif'];
+
+function getFileExt(fileName) {
+  return (fileName || '').toLowerCase().replace(/^.*(\.[^.]+)$/, '$1');
+}
+
+async function processDocumentForAI(fileBuffer, fileName, documentId, propertyId, ownerId) {
+  if (!AI_PROVIDERS.length) return; // No AI configured, skip silently
+  try {
+    const ext = getFileExt(fileName);
+    let text = '';
+
+    if (SUPPORTED_PDF.includes(ext)) {
+      // PDF: extract text directly
+      const parsed = await pdfParse(fileBuffer);
+      text = parsed.text || '';
+      // If PDF has very little text, it's likely scanned — try vision OCR
+      if (text.trim().length < 50) {
+        console.log('[ai] PDF has little text, trying vision OCR...');
+        try {
+          const ocrText = await extractTextFromImage(fileBuffer, 'application/pdf');
+          if (ocrText && ocrText.trim().length > text.trim().length) {
+            text = ocrText;
+            console.log(`[ai] Vision OCR extracted ${text.length} chars from scanned PDF`);
+          }
+        } catch (ocrErr) {
+          console.warn('[ai] Vision OCR failed for scanned PDF:', ocrErr.message);
+        }
+      }
+    } else if (SUPPORTED_IMAGES.includes(ext)) {
+      // Image: use vision model to extract text
+      const mimeMap = {
+        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+        '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp',
+        '.tiff': 'image/tiff', '.tif': 'image/tiff',
+      };
+      const mimeType = mimeMap[ext] || 'image/jpeg';
+      console.log(`[ai] Extracting text from image via vision: ${fileName}`);
+      text = await extractTextFromImage(fileBuffer, mimeType);
+    } else {
+      return; // Unsupported file type
+    }
+
+    if (!text || text.trim().length < 20) {
+      console.log('[ai] Skipping document — too little text extracted:', fileName);
+      return;
+    }
+
+    const chunks = chunkText(text);
+    if (chunks.length === 0) return;
+
+    console.log(`[ai] Processing ${fileName}: ${chunks.length} chunks`);
+
+    const admin = adminSupabase();
+    for (let i = 0; i < chunks.length; i += 10) {
+      const batch = chunks.slice(i, i + 10);
+      const embeddings = await Promise.all(batch.map(c => embedSingle(c)));
+
+      const rows = batch.map((content, j) => ({
+        document_id: documentId,
+        property_id: propertyId,
+        owner_id: ownerId,
+        content,
+        embedding: JSON.stringify(embeddings[j]),
+        chunk_index: i + j,
+      }));
+
+      const { error } = await admin.from('document_chunks').insert(rows);
+      if (error) console.error('[ai] Chunk insert error:', error.message);
+    }
+
+    console.log(`[ai] Done processing ${fileName}`);
+  } catch (err) {
+    console.error('[ai] Error processing document:', err.message);
+  }
+}
+
+async function askAI(question, ownerId, propertyId, onProgress, userClients) {
+  const progress = onProgress || (() => {});
+  const hasUserKey = userClients?.provider;
+  if (!AI_PROVIDERS.length && !hasUserKey) throw new Error('AI is not configured. Add at least one API key (GEMINI_API_KEY, OPENAI_API_KEY, or CLAUDE_API_KEY) to .env, or add your own key in Settings.');
+
+  // ── Gather portfolio summary ──
+  progress('Loading your portfolio…');
+  const admin = adminSupabase();
+  const { data: properties } = await admin
+    .from('properties')
+    .select('id, name, address, zip_code, ownership_status, is_rented, monthly_rent, purchase_date, purchase_price, current_price, size_sq_ft, size_acres, documents(id, type, file_name, created_at)')
+    .eq('owner_id', ownerId)
+    .order('created_at', { ascending: false });
+
+  const SCORED_TYPES = ['encumbrance_certificate','certified_sale_deed','pahani_ror1b','survey_map','bhu_bharati_ec','pattadhar_passbook','property_report','property_tax_receipt','cdma_property_tax_receipt','building_permission','land_use_certificate','mortgage_report','vaastu_report','rera_certificate','sale_deed_receipt'];
+
+  let portfolioSummary = `PORTFOLIO OVERVIEW:\n- Total properties: ${properties?.length || 0}\n`;
+  if (properties?.length) {
+    for (const p of properties) {
+      const docs = p.documents || [];
+      const docTypes = new Set(docs.filter(d => d.type !== 'other' && d.type !== 'photos').map(d => d.type));
+      const missingTypes = SCORED_TYPES.filter(t => !docTypes.has(t));
+      const photoCt = docs.filter(d => d.type === 'photos').length;
+      const scorePct = Math.round((docTypes.size / SCORED_TYPES.length) * 100);
+
+      portfolioSummary += `\nPROPERTY: "${p.name}"\n`;
+      portfolioSummary += `  Address: ${p.address}${p.zip_code ? ', ' + p.zip_code : ''}\n`;
+      portfolioSummary += `  Ownership: ${p.ownership_status || 'owned'}`;
+      if (p.is_rented) portfolioSummary += ` (rented, ₹${p.monthly_rent || '?'}/mo)`;
+      portfolioSummary += '\n';
+      if (p.size_sq_ft) portfolioSummary += `  Size: ${p.size_sq_ft.toLocaleString()} sq ft\n`;
+      if (p.size_acres) portfolioSummary += `  Size: ${p.size_acres} acres\n`;
+      if (p.purchase_date) portfolioSummary += `  Purchase date: ${p.purchase_date}\n`;
+      if (p.purchase_price) portfolioSummary += `  Purchase price: ₹${Number(p.purchase_price).toLocaleString()}\n`;
+      if (p.current_price) portfolioSummary += `  Current value: ₹${Number(p.current_price).toLocaleString()}\n`;
+      portfolioSummary += `  Documentation score: ${scorePct}% (${docTypes.size}/${SCORED_TYPES.length})\n`;
+      portfolioSummary += `  Documents uploaded: ${docs.length} (${photoCt} photos)\n`;
+      if (missingTypes.length > 0 && missingTypes.length <= 10) {
+        portfolioSummary += `  Missing documents: ${missingTypes.join(', ')}\n`;
+      } else if (missingTypes.length > 10) {
+        portfolioSummary += `  Missing documents: ${missingTypes.length} types\n`;
+      }
+    }
+  }
+
+  // ── Document RAG search ──
+  let context = '';
+  let chunksUsed = 0;
+  try {
+    progress('Understanding your question…');
+    const questionEmbedding = await embedSingle(question, userClients);
+
+    progress('Searching your documents…');
+    const { data: chunks, error } = await admin.rpc('match_document_chunks', {
+      query_embedding_text: JSON.stringify(questionEmbedding),
+      owner_filter: ownerId,
+      property_filter: propertyId || null,
+      match_count: 8,
+    });
+
+    if (!error && chunks?.length) {
+      progress(`Found ${chunks.length} relevant section${chunks.length > 1 ? 's' : ''}, reading…`);
+      context = chunks.map(c => c.content).join('\n\n---\n\n');
+      chunksUsed = chunks.length;
+    }
+  } catch (err) {
+    console.warn('[ai] Document search failed, proceeding with portfolio context:', err.message);
+  }
+
+  const systemPrompt = fs.readFileSync(path.join(__dirname, 'docs', 'AI_CONTEXT.md'), 'utf-8');
+
+  let prompt = `${systemPrompt}\n\n${portfolioSummary}`;
+  if (context) {
+    prompt += `\n\nDOCUMENT EXCERPTS:\n${context}`;
+  }
+  prompt += `\n\nUSER QUESTION: ${question}\n\nANSWER:`;
+
+  progress('Generating answer…');
+  const answer = await chatLLM(prompt, userClients);
+  return { answer, chunksUsed };
 }
 
 // ── EXPRESS APP ────────────────────────────────────────────────────────────────
@@ -693,7 +1096,17 @@ app.post('/api/documents/upload', auth, upload.single('file'), async (req, res) 
   if (!property.g_drive_folder_id && folderId) {
     await adminSupabase().from('properties').update({ g_drive_folder_id: folderId }).eq('id', propertyId);
   }
-  res.json(inserted);
+
+  // AI processing — run inline so it works on Vercel serverless
+  let aiProcessed = false;
+  try {
+    await processDocumentForAI(file.buffer, file.originalname, inserted.id, propertyId, req.accountId);
+    aiProcessed = true;
+  } catch (err) {
+    console.error('[ai] Document processing failed:', err.message);
+  }
+
+  res.json({ ...inserted, aiProcessed });
 });
 
 app.delete('/api/documents/:id', auth, async (req, res) => {
@@ -731,6 +1144,235 @@ app.delete('/api/documents/:id', auth, async (req, res) => {
     console.error('Document delete error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── API: DOCUMENT THUMBNAIL ─────────────────────────────────────────────────────
+app.get('/api/documents/:id/thumbnail', auth, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: doc } = await adminSupabase()
+      .from('documents')
+      .select('g_drive_file_id, property_id, type')
+      .eq('id', id)
+      .single();
+    if (!doc?.g_drive_file_id) return res.status(404).json({ error: 'Not found' });
+
+    // Verify property belongs to user's account
+    const { data: prop } = await adminSupabase()
+      .from('properties')
+      .select('id')
+      .eq('id', doc.property_id)
+      .eq('owner_id', req.accountId)
+      .single();
+    if (!prop) return res.status(404).json({ error: 'Not found' });
+
+    const accessToken = await getGoogleAccessToken(adminSupabase(), req.accountId);
+    const driveRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${doc.g_drive_file_id}?alt=media`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!driveRes.ok) return res.status(driveRes.status).json({ error: 'Failed to fetch from Drive' });
+
+    res.set('Content-Type', driveRes.headers.get('content-type') || 'image/jpeg');
+    res.set('Cache-Control', 'private, max-age=3600');
+    const arrayBuf = await driveRes.arrayBuffer();
+    res.send(Buffer.from(arrayBuf));
+  } catch (err) {
+    console.error('[thumbnail] Error:', err.message);
+    res.status(500).json({ error: 'Thumbnail fetch failed' });
+  }
+});
+
+// ── API: BYOK (Bring Your Own Key) ─────────────────────────────────────────────
+// Helper to load user's BYOK clients if they have a key saved
+async function loadUserClients(accountId) {
+  const { data } = await adminSupabase()
+    .from('user_profiles')
+    .select('ai_api_key')
+    .eq('id', accountId)
+    .single();
+  if (!data?.ai_api_key) return null;
+  const clients = createUserAIClients(data.ai_api_key);
+  return clients.provider ? clients : null;
+}
+
+app.get('/api/settings/api-key', auth, async (req, res) => {
+  const { data } = await adminSupabase()
+    .from('user_profiles')
+    .select('ai_api_key')
+    .eq('id', req.accountId)
+    .single();
+  const key = data?.ai_api_key || '';
+  const provider = detectKeyProvider(key);
+  res.json({
+    hasKey: !!key,
+    provider,
+    maskedKey: key ? key.slice(0, 8) + '•'.repeat(Math.max(0, key.length - 12)) + key.slice(-4) : '',
+  });
+});
+
+app.put('/api/settings/api-key', auth, async (req, res) => {
+  const { apiKey } = req.body;
+  if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
+    return res.status(400).json({ error: 'Invalid API key' });
+  }
+  const provider = detectKeyProvider(apiKey.trim());
+  if (!provider) {
+    return res.status(400).json({ error: 'Unrecognized key format. Supported: OpenAI (sk-...), Anthropic (sk-ant-...), or Google Gemini (AIza...)' });
+  }
+  const { error } = await adminSupabase()
+    .from('user_profiles')
+    .update({ ai_api_key: apiKey.trim() })
+    .eq('id', req.accountId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true, provider });
+});
+
+app.delete('/api/settings/api-key', auth, async (req, res) => {
+  const { error } = await adminSupabase()
+    .from('user_profiles')
+    .update({ ai_api_key: null })
+    .eq('id', req.accountId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// ── API: AI ────────────────────────────────────────────────────────────────────
+app.post('/api/ai/ask', auth, async (req, res) => {
+  // Premium-only
+  const userEmail = req.profile?.email || req.user?.email || '';
+  const subscription = await getUserPlan(req.user.id, userEmail);
+  if (!subscription.isPremium) {
+    return res.status(403).json({ error: 'AI is a Premium feature. Upgrade to use it.' });
+  }
+
+  const { question, propertyId } = req.body;
+  if (!question || typeof question !== 'string' || question.trim().length < 3) {
+    return res.status(400).json({ error: 'Please ask a question (at least 3 characters).' });
+  }
+
+  // Load user's BYOK key if available
+  const userClients = await loadUserClients(req.accountId);
+
+  // SSE: stream progress events to client
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders();
+
+  const sendEvent = (type, data) => {
+    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    if (res.flush) res.flush();
+  };
+
+  try {
+    const result = await askAI(
+      question.trim(),
+      req.accountId,
+      propertyId || null,
+      (stage) => sendEvent('progress', { message: stage }),
+      userClients
+    );
+    sendEvent('done', { answer: result.answer, chunksUsed: result.chunksUsed });
+  } catch (err) {
+    console.error('[ai] Ask error:', err.message);
+    const msg = err.message || '';
+    if (msg.includes('429') || msg.includes('quota') || msg.includes('credit balance')) {
+      sendEvent('error', { error: 'AI is temporarily unavailable due to rate limits. Please try again in a minute.' });
+    } else {
+      sendEvent('error', { error: msg });
+    }
+  } finally {
+    res.end();
+  }
+});
+
+// Reprocess all existing documents for AI (downloads from Google Drive and re-chunks)
+app.post('/api/ai/reprocess', auth, async (req, res) => {
+  if (!AI_PROVIDERS.length) return res.status(400).json({ error: 'AI not configured' });
+  const plan = await getUserPlan(req.accountId);
+  if (!plan.isPremium) return res.status(403).json({ error: 'Premium required' });
+
+  const admin = adminSupabase();
+
+  // Get all documents for this account
+  const { data: docs, error } = await admin
+    .from('documents')
+    .select('id, file_name, g_drive_file_id, property_id')
+    .eq('owner_id', req.accountId);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!docs?.length) return res.json({ message: 'No documents to process', processed: 0 });
+
+  // Clear existing chunks for this owner
+  await admin.from('document_chunks').delete().eq('owner_id', req.accountId);
+
+  // Get a Drive access token
+  const { data: profile } = await admin
+    .from('user_profiles')
+    .select('google_access_token, google_refresh_token')
+    .eq('id', req.user.id)
+    .single();
+
+  let accessToken = profile?.google_access_token;
+  if (profile?.google_refresh_token) {
+    try {
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: process.env.GOOGLE_CLIENT_ID,
+          client_secret: process.env.GOOGLE_CLIENT_SECRET,
+          refresh_token: profile.google_refresh_token,
+          grant_type: 'refresh_token',
+        }),
+      });
+      const tokenData = await tokenRes.json();
+      if (tokenData.access_token) accessToken = tokenData.access_token;
+    } catch (e) { /* use existing token */ }
+  }
+
+  res.json({ message: `Reprocessing ${docs.length} documents in background`, count: docs.length });
+
+  // Process in background
+  let processed = 0;
+  for (const doc of docs) {
+    try {
+      if (!doc.g_drive_file_id || !accessToken) continue;
+      // Download file from Google Drive
+      const driveRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${doc.g_drive_file_id}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!driveRes.ok) {
+        console.warn(`[ai] Failed to download ${doc.file_name}: ${driveRes.status}`);
+        continue;
+      }
+      const fileBuffer = Buffer.from(await driveRes.arrayBuffer());
+      await processDocumentForAI(fileBuffer, doc.file_name, doc.id, doc.property_id, req.accountId);
+      processed++;
+    } catch (err) {
+      console.error(`[ai] Reprocess error for ${doc.file_name}:`, err.message);
+    }
+  }
+  console.log(`[ai] Reprocessing complete: ${processed}/${docs.length} documents`);
+});
+
+app.get('/api/ai/status', auth, async (req, res) => {
+  const admin = adminSupabase();
+  const { count } = await admin
+    .from('document_chunks')
+    .select('id', { count: 'exact', head: true })
+    .eq('owner_id', req.accountId);
+  const userClients = await loadUserClients(req.accountId);
+  res.json({
+    configured: AI_PROVIDERS.length > 0 || !!userClients?.provider,
+    providers: AI_PROVIDERS,
+    byokProvider: userClients?.provider || null,
+    chunksCount: count || 0,
+  });
 });
 
 // ── API: SEARCH ────────────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from './lib/auth.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Header from './components/Header.jsx';
+import AIChat from './components/AIChat.jsx';
 
 const Landing = lazy(() => import('./pages/Landing.jsx'));
 const SignIn = lazy(() => import('./pages/SignIn.jsx'));
@@ -35,6 +36,7 @@ function ProtectedLayout() {
           </Suspense>
         </div>
       </div>
+      {user?.subscription?.isPremium && <AIChat />}
     </div>
   );
 }

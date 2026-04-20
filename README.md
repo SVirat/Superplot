@@ -31,6 +31,12 @@
 - **17 Indian Legal Document Types** — Track encumbrance certificates, sale deeds, pahani, tax receipts, and more
 - **Google Drive Storage** — Documents stored in your own Drive, organized by property folders
 - **Street View Previews** — Property cards show Google Street View photos (with map embed fallback)
+- **Photo Thumbnails** — Uploaded photos display as real image thumbnails (proxied from Google Drive)
+- **AI Chat (Premium)** — Ask questions about your documents and portfolio using Superplot AI
+- **Multi-Provider AI** — Gemini, OpenAI, and Anthropic with automatic fallback chain
+- **BYOK (Bring Your Own Key)** — Use your own AI API key for document processing and chat
+- **Portfolio Intelligence** — AI answers high-level questions (property counts, missing docs, values)
+- **Document OCR** — Extracts text from scanned PDFs and images via Vision AI
 - **Role-Based Access Control** — Invite family members as contributors or viewers
 - **Multi-Account Support** — Switch between your own properties and accounts you've been invited to
 - **Search** — Find properties by name, address, ZIP, or missing document type
@@ -46,7 +52,8 @@
 |---|---|---|
 | Properties | Up to 3 | Unlimited |
 | Member invites | Up to 1 | Unlimited |
-| AI features (future) | ✗ | ✓ |
+| AI Chat & RAG | ✗ | ✓ |
+| BYOK (own API key) | ✗ | ✓ |
 | Price | ₹0 | ₹99/mo or ₹999/yr |
 
 ---
@@ -63,6 +70,9 @@
 | **Email** | Resend |
 | **Payments** | Razorpay Subscriptions |
 | **Maps** | Google Maps Embed + Street View Static API |
+| **AI** | Gemini / OpenAI / Anthropic (multi-provider fallback) |
+| **AI Embeddings** | Gemini Embedding / OpenAI text-embedding-3-small (768d) |
+| **AI Vector DB** | pgvector (Supabase Postgres) |
 | **Styling** | Pure CSS with custom properties (light glassmorphism theme) |
 | **Hosting** | Vercel (serverless functions + static SPA) |
 
@@ -141,6 +151,9 @@ RAZORPAY_PLAN_ANNUAL=""                      # Razorpay annual plan ID
 VITE_RAZORPAY_KEY_ID=""                      # Same as RAZORPAY_KEY_ID (exposed to frontend)
 VITE_RAZORPAY_PLAN_MONTHLY=""                # Same as RAZORPAY_PLAN_MONTHLY (exposed to frontend)
 VITE_RAZORPAY_PLAN_ANNUAL=""                 # Same as RAZORPAY_PLAN_ANNUAL (exposed to frontend)
+GEMINI_API_KEY=""                            # Google Gemini API key (AI features)
+OPENAI_API_KEY=""                            # OpenAI API key (AI fallback)
+CLAUDE_API_KEY=""                            # Anthropic Claude API key (AI fallback)
 ```
 
 ### 5. Run
@@ -168,7 +181,8 @@ Superplot/
 ├── api/
 │   └── index.js                 # Vercel serverless entry point
 ├── docs/
-│   ├── PRD.md                   # Product requirements document
+│   ├── AI_CONTEXT.md            # AI system prompt for Superplot AI
+│   ├── PRD.md                   # Product requirements document", "oldString": "├── docs/\n│   ├── PRD.md                   # Product requirements document
 │   ├── PRIVACY_POLICY.md
 │   └── TERMS_AND_CONDITIONS.md
 ├── supabase/
@@ -230,6 +244,13 @@ Superplot/
 | DELETE | `/api/members/:id` | Remove member |
 | POST | `/api/subscription/create` | Create Razorpay subscription |
 | POST | `/api/webhooks/razorpay` | Razorpay webhook (no auth) |
+| GET | `/api/documents/:id/thumbnail` | Proxy image thumbnail from Google Drive |
+| GET | `/api/settings/api-key` | Get masked BYOK API key info |
+| PUT | `/api/settings/api-key` | Save BYOK API key |
+| DELETE | `/api/settings/api-key` | Remove BYOK API key |
+| POST | `/api/ai/ask` | AI chat with SSE streaming (premium) |
+| GET | `/api/ai/status` | AI provider status + chunk count |
+| POST | `/api/ai/reprocess` | Re-process all documents for AI (premium) |
 
 All endpoints (except `/api/config`) require authentication via `Authorization: Bearer <token>` header. Multi-account requests include `X-Account-Id` header.
 

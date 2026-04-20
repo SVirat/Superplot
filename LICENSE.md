@@ -37,7 +37,7 @@ Users of authorized deployments retain full ownership of their data (property re
 
 ## 6. Third-Party Services
 
-The Software integrates with third-party services (Google OAuth, Google Drive API, Supabase, Resend) which are governed by their own respective terms of service and privacy policies. Use of the Software does not grant any rights under those third-party agreements.
+The Software integrates with third-party services (Google OAuth, Google Drive API, Supabase, Resend, Google Gemini API, OpenAI API, Anthropic API, Razorpay) which are governed by their own respective terms of service and privacy policies. Use of the Software does not grant any rights under those third-party agreements.
 
 ## 7. Disclaimer of Warranty
 

@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
-import { Upload, CheckCircle, AlertCircle, X, FileText, Image } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { Upload, CheckCircle, AlertCircle, X, FileText, Image, Loader2 } from 'lucide-react';
 import { docLabel } from '../lib/constants.js';
 import { api } from '../lib/api.js';
 
@@ -19,10 +19,18 @@ const STAGE_LABELS = {
   [STAGES.PREPARING]: 'Preparing file...',
   [STAGES.UPLOADING]: 'Sending file...',
   [STAGES.PROCESSING]: 'Uploading to Google Drive...',
-  [STAGES.SAVING]: 'Saving to database...',
+  [STAGES.SAVING]: 'Finalizing...',
   [STAGES.DONE]: 'Upload complete!',
   [STAGES.ERROR]: 'Upload failed',
 };
+
+const PROCESSING_MESSAGES = [
+  'Uploading to Google Drive...',
+  'Saving to Drive...',
+  'Analyzing document...',
+  'Processing content...',
+  'Almost done...',
+];
 
 function friendlyError(msg) {
   if (!msg) return 'Something went wrong. Please try again.';
@@ -62,11 +70,36 @@ export default function UploadDialog({ docType, propertyId, onClose, onSuccess }
   const folderRef = useRef(null);
   const abortRef = useRef(false);
   const isPhotos = docType === 'photos';
+  const [processingPct, setProcessingPct] = useState(0);
+  const [processingMsg, setProcessingMsg] = useState(0);
+
+  // Simulated progress during server processing
+  useEffect(() => {
+    if (stage !== STAGES.PROCESSING) {
+      setProcessingPct(0);
+      setProcessingMsg(0);
+      return;
+    }
+    // Slowly increment progress (never reaches 100)
+    const pctTimer = setInterval(() => {
+      setProcessingPct(prev => {
+        if (prev < 30) return prev + 2;
+        if (prev < 60) return prev + 1;
+        if (prev < 85) return prev + 0.5;
+        return Math.min(prev + 0.2, 95);
+      });
+    }, 500);
+    // Cycle through messages
+    const msgTimer = setInterval(() => {
+      setProcessingMsg(prev => (prev + 1) % PROCESSING_MESSAGES.length);
+    }, 4000);
+    return () => { clearInterval(pctTimer); clearInterval(msgTimer); };
+  }, [stage]);
 
   const handleFiles = useCallback((newFiles) => {
     const arr = Array.from(newFiles);
     const filtered = isPhotos ? arr.filter(f => f.type.startsWith('image/')) : arr;
-    setFiles(prev => isPhotos ? [...prev, ...filtered] : filtered.slice(0, 1));
+    setFiles(prev => [...prev, ...filtered]);
     setError('');
   }, [isPhotos]);
 
@@ -91,12 +124,16 @@ export default function UploadDialog({ docType, propertyId, onClose, onSuccess }
     if (!files.length) return;
     abortRef.current = false;
     setError('');
-    setCompletedFiles(0);
+    const uploadedDocs = [];
+    let shouldReload = false;
+    // Start from completedFiles so retry skips already-uploaded files
+    const startIdx = completedFiles;
 
-    for (let i = 0; i < files.length; i++) {
+    for (let i = startIdx; i < files.length; i++) {
       if (abortRef.current) break;
       setCurrentFile(i);
       setUploadPct(0);
+      const fileStart = Date.now();
 
       // Stage: Preparing
       setStage(STAGES.PREPARING);
@@ -110,10 +147,11 @@ export default function UploadDialog({ docType, propertyId, onClose, onSuccess }
       fd.append('docType', docType);
 
       try {
-        await api.uploadDocument(fd, {
+        const result = await api.uploadDocument(fd, {
           onProgress: (pct) => setUploadPct(pct),
           onServerProcessing: () => setStage(STAGES.PROCESSING),
         });
+        if (result) uploadedDocs.push(result);
       } catch (err) {
         setStage(STAGES.ERROR);
         setError(friendlyError(err.message));
@@ -124,17 +162,24 @@ export default function UploadDialog({ docType, propertyId, onClose, onSuccess }
       setStage(STAGES.SAVING);
       setUploadPct(100);
       setCompletedFiles(i + 1);
+      if (Date.now() - fileStart > 7000) shouldReload = true;
       await new Promise(r => setTimeout(r, 200));
     }
 
     setStage(STAGES.DONE);
-    setTimeout(() => onSuccess(), 600);
+    if (shouldReload) {
+      setTimeout(() => window.location.reload(), 600);
+    } else {
+      setTimeout(() => onSuccess(uploadedDocs), 600);
+    }
   }
 
   const isUploading = stage !== STAGES.IDLE && stage !== STAGES.DONE && stage !== STAGES.ERROR;
-  const isIndeterminate = stage === STAGES.PROCESSING || stage === STAGES.SAVING;
+  const isProcessing = stage === STAGES.PROCESSING;
+  const isSaving = stage === STAGES.SAVING;
   const totalSize = files.reduce((s, f) => s + f.size, 0);
-  const overall = overallPct(currentFile, uploadPct);
+  const overall = isProcessing ? Math.round(processingPct) : overallPct(currentFile, uploadPct);
+  const stageLabel = isProcessing ? PROCESSING_MESSAGES[processingMsg] : STAGE_LABELS[stage];
 
   return (
     <div className="dialog-overlay" onClick={e => !isUploading && e.target === e.currentTarget && onClose()}>
@@ -181,7 +226,7 @@ export default function UploadDialog({ docType, propertyId, onClose, onSuccess }
                 ref={inputRef}
                 type="file"
                 accept={isPhotos ? 'image/*' : DOC_ACCEPT}
-                multiple={isPhotos}
+                multiple
                 style={{ display: 'none' }}
                 onChange={e => { handleFiles(e.target.files); e.target.value = ''; }}
               />
@@ -236,21 +281,23 @@ export default function UploadDialog({ docType, propertyId, onClose, onSuccess }
           {isUploading && (
             <div className="upload-progress-area">
               <div className="upload-progress-ring-wrap">
-                <svg className={`upload-progress-ring${isIndeterminate ? ' indeterminate' : ''}`} viewBox="0 0 80 80">
+                <svg className="upload-progress-ring" viewBox="0 0 80 80">
                   <circle cx="40" cy="40" r="34" fill="none" stroke="var(--border-light)" strokeWidth="6" />
                   <circle
                     cx="40" cy="40" r="34" fill="none"
                     stroke="var(--primary)" strokeWidth="6"
                     strokeLinecap="round"
                     strokeDasharray={`${2 * Math.PI * 34}`}
-                    strokeDashoffset={isIndeterminate ? `${2 * Math.PI * 34 * 0.25}` : `${2 * Math.PI * 34 * (1 - overall / 100)}`}
-                    style={{ transition: isIndeterminate ? 'none' : 'stroke-dashoffset 300ms ease', transform: 'rotate(-90deg)', transformOrigin: '50% 50%' }}
+                    strokeDashoffset={isSaving ? `${2 * Math.PI * 34 * 0.05}` : `${2 * Math.PI * 34 * (1 - overall / 100)}`}
+                    style={{ transition: 'stroke-dashoffset 500ms ease', transform: 'rotate(-90deg)', transformOrigin: '50% 50%' }}
                   />
                 </svg>
-                <div className="upload-progress-pct">{isIndeterminate ? '...' : `${overall}%`}</div>
+                <div className="upload-progress-pct">
+                  {isSaving ? <Loader2 size={20} className="spin" /> : `${overall}%`}
+                </div>
               </div>
               <div className="upload-progress-info">
-                <div className="upload-progress-stage">{STAGE_LABELS[stage]}</div>
+                <div className="upload-progress-stage">{stageLabel}</div>
                 {files.length > 1 && (
                   <div className="text-xs text-lighter">
                     File {currentFile + 1} of {files.length}: {files[currentFile]?.name}
@@ -261,7 +308,7 @@ export default function UploadDialog({ docType, propertyId, onClose, onSuccess }
                 )}
                 <div className="upload-progress-bar-wrap">
                   <div className="upload-progress-bar">
-                    <div className={`upload-progress-bar-fill${isIndeterminate ? ' indeterminate' : ''}`} style={isIndeterminate ? {} : { width: `${overall}%` }} />
+                    <div className={`upload-progress-bar-fill${isSaving ? ' indeterminate' : ''}`} style={isSaving ? {} : { width: `${overall}%`, transition: 'width 500ms ease' }} />
                   </div>
                 </div>
               </div>

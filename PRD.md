@@ -1,8 +1,8 @@
 # Outsite: Product Requirements Document
 
-**Version**: 1.0.0
+**Version**: 1.1.0
 
-**Date**: April 19, 2026
+**Date**: April 20, 2026
 
 **Public URL**: https://outsite.vercel.app
 
@@ -38,6 +38,10 @@ Outsite is a **private, self-hosted web application** for cataloging real estate
 | Theme | Light glassmorphism, CSS custom properties | |
 | Payments | Razorpay Subscriptions | Monthly + Annual plans |
 | Maps | Google Maps Embed + Street View Static API | Property previews |
+| AI (Chat) | Gemini / OpenAI / Anthropic | Multi-provider fallback chain |
+| AI (Embeddings) | Gemini Embedding / OpenAI text-embedding-3-small | 768-dim vectors |
+| AI (Vector DB) | pgvector (Supabase) | Cosine similarity search via RPC |
+| AI (OCR) | Gemini Vision / GPT-4o-mini / Claude Vision | Scanned PDF & image text extraction |
 
 **No TypeScript. No Next.js. No Tailwind. Pure CSS with custom properties.**
 
@@ -170,7 +174,19 @@ The app uses a multi-account RBAC system. Each user has their own account by def
 | created_at | TIMESTAMPTZ | Auto |
 | updated_at | TIMESTAMPTZ | Auto-updated via trigger |
 
-### 5.6 Row-Level Security (RLS)
+### 5.6 `document_chunks` (AI / RAG)
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID (PK) | Default: `gen_random_uuid()` |
+| document_id | UUID | FK → `documents(id)` CASCADE DELETE |
+| property_id | UUID | FK → `properties(id)` CASCADE DELETE |
+| owner_id | UUID | FK → `auth.users(id)` CASCADE DELETE |
+| content | TEXT | NOT NULL. Chunk of extracted text |
+| embedding | vector(768) | pgvector embedding |
+| chunk_index | INTEGER | Position within document |
+| created_at | TIMESTAMPTZ | Auto |
+
+### 5.7 Row-Level Security (RLS)
 - **user_profiles**: Users can SELECT/UPDATE only their own row
 - **properties**: Full CRUD only for rows where `owner_id = auth.uid()`
 - **documents**: Full CRUD only for documents whose parent property is owned by `auth.uid()`
@@ -178,7 +194,7 @@ The app uses a multi-account RBAC system. Each user has their own account by def
 - **subscriptions**: Users can SELECT only their own row; service role has full access
 - All tables have RLS enabled with `FORCE ROW LEVEL SECURITY`
 
-### 5.7 Indexes
+### 5.8 Indexes
 - `idx_properties_owner` on `properties(owner_id)`
 - `idx_documents_property` on `documents(property_id)`
 - `idx_account_members_owner` on `account_members(owner_id)`
@@ -186,8 +202,10 @@ The app uses a multi-account RBAC system. Each user has their own account by def
 - `idx_account_members_user` on `account_members(user_id)`
 - `idx_subscriptions_user` on `subscriptions(user_id)`
 - `idx_subscriptions_razorpay` on `subscriptions(razorpay_subscription_id)`
+- `idx_document_chunks_owner` on `document_chunks(owner_id)`
+- `idx_document_chunks_document` on `document_chunks(document_id)`
 
-### 5.8 Triggers
+### 5.9 Triggers
 - **Auto-create user profile on signup**: `on_auth_user_created` trigger on `auth.users` → inserts into `user_profiles` using `raw_user_meta_data`
 - **Auto-update `updated_at`**: Trigger on `properties`, `documents`, `user_profiles`, and `subscriptions` sets `updated_at = NOW()` before update
 
@@ -369,6 +387,7 @@ Used on both property cards (dashboard/properties page) and the property detail 
 
 ### 9.12 Page: Settings (`/settings`)
 - Google Drive connection info
+- **AI — Bring Your Own Key**: BYOK section for premium users to add their own API key (auto-detects OpenAI/Gemini/Anthropic), with masked key display, replace, and delete
 - Account details (read-only)
 
 ---
@@ -437,6 +456,13 @@ Responsive grid: 1 col → 2 col → 3 col → 4 col. Empty state with "No prope
 | POST | `/api/subscription/create` | Yes | admin | Create Razorpay subscription for checkout |
 | POST | `/api/subscription/cancel` | Yes | admin | Cancel active Razorpay subscription (no-op for backdoor users) |
 | POST | `/api/webhooks/razorpay` | No | — | Razorpay webhook (signature-verified) |
+| GET | `/api/documents/:id/thumbnail` | Yes | — | Proxy image thumbnail from Google Drive |
+| GET | `/api/settings/api-key` | Yes | — | Get masked BYOK API key + detected provider |
+| PUT | `/api/settings/api-key` | Yes | — | Save BYOK API key (auto-detects provider) |
+| DELETE | `/api/settings/api-key` | Yes | — | Remove BYOK API key |
+| POST | `/api/ai/ask` | Yes | premium | AI chat with SSE streaming (uses RAG + portfolio context) |
+| GET | `/api/ai/status` | Yes | — | AI provider status + document chunk count |
+| POST | `/api/ai/reprocess` | Yes | premium | Re-download and re-process all documents for AI |
 
 ---
 
@@ -447,7 +473,8 @@ Responsive grid: 1 col → 2 col → 3 col → 4 col. Empty state with "No prope
 |---|---|---|
 | Properties | Up to 3 | Unlimited |
 | Member invites | Up to 1 | Unlimited |
-| AI features (future) | No | Yes |
+| AI Chat & RAG | No | Yes |
+| BYOK (own API key) | No | Yes |
 | Price | ₹0 | ₹99/mo or ₹999/yr |
 
 ### 12.2 Enforcement
@@ -473,7 +500,77 @@ Responsive grid: 1 col → 2 col → 3 col → 4 col. Empty state with "No prope
 
 ---
 
-## 13. Email Invitations
+## 13. AI Features (Premium)
+
+### 13.1 Overview
+Superplot includes an AI assistant ("Superplot AI") that can:
+- Answer questions about uploaded property documents (RAG-based)
+- Answer portfolio-level questions (property counts, missing docs, values, rental income)
+- Extract text from PDFs and scanned images (OCR)
+
+### 13.2 Multi-Provider Fallback
+AI functions use a **fallback chain**: Gemini → OpenAI → Anthropic. If one provider fails (rate limit, quota), the next is tried automatically.
+
+| Function | Gemini | OpenAI | Anthropic |
+|----------|--------|--------|-----------|
+| Chat | gemini-2.0-flash-lite | gpt-4o-mini | claude-3-5-sonnet |
+| Embeddings | gemini-embedding-001 (768d) | text-embedding-3-small (768d) | N/A |
+| Vision/OCR | gemini-2.0-flash-lite | gpt-4o-mini | claude-3-5-sonnet |
+
+### 13.3 Document Processing Pipeline
+1. On upload, `processDocumentForAI()` runs inline (works on Vercel serverless)
+2. **PDFs**: Text extracted via `pdf-parse`; if < 50 chars, tries Vision OCR on the scanned PDF
+3. **Images**: Text extracted via Vision OCR (multi-provider fallback)
+4. Text is chunked (500 chars, 100 overlap) and embedded in batches of 10
+5. Chunks + embeddings stored in `document_chunks` table (pgvector)
+
+### 13.4 AI Chat (askAI)
+1. Fetches the user's full **portfolio summary** (all properties + docs metadata + missing docs + scores)
+2. Embeds the question and performs **vector similarity search** via `match_document_chunks` RPC (top 8 results)
+3. Constructs a prompt with system instructions (`docs/AI_CONTEXT.md`), portfolio summary, and document excerpts
+4. Calls `chatLLM()` with fallback chain
+5. Streams progress events via **SSE** (Server-Sent Events)
+
+### 13.5 Portfolio-Level Intelligence
+The AI receives a structured summary of all properties including:
+- Property names, addresses, ownership status, rental info
+- Size, purchase date, purchase price, current value
+- Documentation score (% and missing document types)
+- Document counts per property
+
+This allows questions like: "How many properties do I have?", "Which properties need documents?", "What's my total property value?"
+
+### 13.6 BYOK (Bring Your Own Key)
+- Premium users can add their own AI API key in **Settings → AI — Bring Your Own Key**
+- Single input field — the provider is **auto-detected** from the key format:
+  - `sk-` → OpenAI
+  - `sk-ant-` → Anthropic
+  - `AIza` → Google Gemini
+- User's key is tried **first** before falling back to platform keys
+- Stored in `user_profiles.ai_api_key`
+- Can be viewed (masked), replaced, or deleted
+
+### 13.7 AI System Prompt
+Located at `docs/AI_CONTEXT.md`. Instructs the AI to:
+- Use portfolio data for high-level questions
+- Use document excerpts for content-specific questions
+- Never fabricate information
+- Never give legal advice
+- Represent the Superplot brand
+
+---
+
+## 14. Photo Thumbnails
+
+- Photos uploaded to Google Drive are displayed as **actual image thumbnails** in the property detail photo grid
+- A server-side proxy endpoint (`GET /api/documents/:id/thumbnail`) fetches the image from Drive with auth
+- Thumbnails are cached client-side as blob URLs to avoid re-fetching
+- Falls back to a generic icon on error, shows a spinner while loading
+- The proxy verifies property ownership before serving the image
+
+---
+
+## 15. Email Invitations
 
 - When an admin adds a member, an **invitation email** is sent via Resend
 - Email includes: inviter's name, the app URL, and instructions to sign in with Google
@@ -482,39 +579,39 @@ Responsive grid: 1 col → 2 col → 3 col → 4 col. Empty state with "No prope
 
 ---
 
-## 14. UI/UX Specifications
+## 16. UI/UX Specifications
 
-### 14.1 Theme
+### 16.1 Theme
 - **Light glassmorphism** with CSS custom properties (no Tailwind)
 - Primary color: Indigo accent (`#6366f1`)
 - Background: Light with frosted-glass surfaces
 - Font: **Inter** (Google Fonts)
 - Border radius: `0.625rem` default
 
-### 14.2 Currency
+### 16.2 Currency
 - All monetary values in **Indian Rupees (₹)**
 - `en-IN` locale formatting (lakh/crore grouping)
 
-### 14.3 Date Format
+### 16.3 Date Format
 - `en-IN` locale, medium format: "18 Apr 2026"
 
-### 14.4 Responsive Design
+### 16.4 Responsive Design
 - Mobile-first
 - Sidebar visible at `lg` breakpoint (~1024px)
 - Property grid: 1 → 2 → 3 → 4 columns
 - Property detail: Stacked → side-by-side at `lg`
 
-### 14.5 Loading States
+### 16.5 Loading States
 - Every page has skeleton loading matching the final layout
 - Animated pulse effect
 
-### 14.6 Optimistic Updates
+### 16.6 Optimistic Updates
 - Document deletion: Immediately hidden from UI, API call in background, reverts on failure
 - Property deletion: Navigates to `/properties` immediately
 
 ---
 
-## 15. Environment Variables
+## 17. Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -535,25 +632,28 @@ Responsive grid: 1 col → 2 col → 3 col → 4 col. Empty state with "No prope
 | `VITE_RAZORPAY_KEY_ID` | No | Same as RAZORPAY_KEY_ID (exposed to frontend via Vite) |
 | `VITE_RAZORPAY_PLAN_MONTHLY` | No | Same as RAZORPAY_PLAN_MONTHLY (exposed to frontend) |
 | `VITE_RAZORPAY_PLAN_ANNUAL` | No | Same as RAZORPAY_PLAN_ANNUAL (exposed to frontend) |
+| `GEMINI_API_KEY` | No | Google Gemini API key (AI chat, embeddings, vision) |
+| `OPENAI_API_KEY` | No | OpenAI API key (AI fallback) |
+| `CLAUDE_API_KEY` | No | Anthropic Claude API key (AI fallback) |
 
 ---
 
-## 16. Legal Pages
+## 18. Legal Pages
 
-### 16.1 Privacy Policy (`docs/PRIVACY_POLICY.md`)
+### 18.1 Privacy Policy (`docs/PRIVACY_POLICY.md`)
 - Data collection: account info, property metadata, documents stored in user's own Drive, OAuth tokens
 - No third-party sharing, no ads, no analytics
 - RLS security model, `drive.file` scope
 - GDPR-style user rights
 
-### 16.2 Terms and Conditions (`docs/TERMS_AND_CONDITIONS.md`)
+### 18.2 Terms and Conditions (`docs/TERMS_AND_CONDITIONS.md`)
 - Service provided as-is
 - User retains ownership of all data
 - Limitation of liability
 
 ---
 
-## 17. Route Map
+## 19. Route Map
 
 | Route | Type | Auth | Description |
 |-------|------|------|-------------|
@@ -570,7 +670,7 @@ Responsive grid: 1 col → 2 col → 3 col → 4 col. Empty state with "No prope
 
 ---
 
-## 18. File Structure
+## 20. File Structure
 
 ```
 Outsite/
