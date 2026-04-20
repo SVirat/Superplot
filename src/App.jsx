@@ -16,6 +16,8 @@ const PropertyEdit = lazy(() => import('./pages/PropertyEdit.jsx'));
 const Search = lazy(() => import('./pages/Search.jsx'));
 const Access = lazy(() => import('./pages/Access.jsx'));
 const Settings = lazy(() => import('./pages/Settings.jsx'));
+const Privacy = lazy(() => import('./pages/Privacy.jsx'));
+const Terms = lazy(() => import('./pages/Terms.jsx'));
 
 function Loading() {
   return <div className="loading-page"><div className="spinner" /></div>;
@@ -55,6 +57,8 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/sign-in" element={<Landing />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/tos" element={<Terms />} />
         <Route element={<ProtectedLayout />}>
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="properties" element={<Properties />} />
